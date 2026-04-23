@@ -1,23 +1,26 @@
 """MCP server entry point.
 
-v1 surface: list_documents, get_document, search, create_document, update_document.
+v2 surface: list_documents, get_document, search (hybrid), create_document,
+update_document, reindex_all_embeddings.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import frontmatter
 from mcp.server.fastmcp import FastMCP
 
 from knowledge_mcp.config import Settings, load_settings
+from knowledge_mcp.embed import OllamaProvider
 from knowledge_mcp.indexer import Indexer
+from knowledge_mcp.search import HybridSearch
 from knowledge_mcp.storage.fts import FTSStore
+from knowledge_mcp.storage.vectors import VectorStore
 from knowledge_mcp.vault import list_markdown, read_markdown
 from knowledge_mcp.watcher import VaultWatcher
 
@@ -44,32 +47,62 @@ def _validate_md_path(rel: str) -> None:
         raise ValueError("path must end in .md")
 
 
+def _check_embedding_drift(vectors: VectorStore, expected: str) -> None:
+    present = vectors.model_versions_present()
+    if not present:
+        return
+    drift = present - {expected}
+    if drift:
+        logger.warning(
+            "embedding drift: vector store contains model_version=%s but config "
+            "expects %s — call reindex_all_embeddings to reconcile",
+            sorted(drift),
+            expected,
+        )
+
+
 def build_server(
     settings: Settings | None = None,
     *,
     start_indexing: bool = True,
+    enable_vectors: bool = True,
 ) -> tuple[FastMCP, "ServerDeps"]:
-    """Construct a configured FastMCP instance.
-
-    Returns the MCP server plus a ``ServerDeps`` handle so tests and ``main``
-    can inspect or shut down the background machinery.
-    """
     if settings is None:
         settings = load_settings()
 
     index_dir = settings.vault_path / ".index"
     index_dir.mkdir(parents=True, exist_ok=True)
     fts = FTSStore(index_dir / "fts.db")
-    indexer = Indexer(settings.vault_path, fts)
+
+    vectors: VectorStore | None = None
+    embeddings: OllamaProvider | None = None
+    if enable_vectors:
+        try:
+            embeddings = OllamaProvider(
+                endpoint=settings.embedding_endpoint,
+                model_version=settings.embedding_model,
+            )
+            vectors = VectorStore(index_dir / "vectors.lance", dim=embeddings.dim)
+            _check_embedding_drift(vectors, embeddings.model_version)
+        except Exception:
+            logger.exception("vector subsystem failed to initialise; degrading to BM25-only")
+            vectors = None
+            embeddings = None
+
+    indexer = Indexer(
+        settings.vault_path, fts, vectors=vectors, embeddings=embeddings
+    )
+    hybrid = HybridSearch(
+        fts=fts, vectors=vectors, embeddings=embeddings, rrf_k=settings.rrf_k
+    )
 
     watcher: VaultWatcher | None = None
-    reindex_thread: threading.Thread | None = None
 
     if start_indexing:
-        reindex_thread = threading.Thread(
+        import threading
+        threading.Thread(
             target=indexer.reindex_all, name="reindex-all", daemon=True
-        )
-        reindex_thread.start()
+        ).start()
         watcher = VaultWatcher(
             vault_path=settings.vault_path,
             on_upsert=indexer.reindex_file,
@@ -77,17 +110,19 @@ def build_server(
         )
         watcher.start()
 
-    deps = ServerDeps(settings=settings, fts=fts, indexer=indexer, watcher=watcher)
+    deps = ServerDeps(
+        settings=settings,
+        fts=fts,
+        vectors=vectors,
+        indexer=indexer,
+        watcher=watcher,
+    )
 
     mcp = FastMCP("knowledge-mcp")
 
     @mcp.tool()
     def list_documents(prefix: str = "") -> list[dict[str, str]]:
-        """List markdown documents in the vault.
-
-        Args:
-            prefix: Optional vault-relative path prefix filter.
-        """
+        """List markdown documents in the vault. Optional path-prefix filter."""
         try:
             summaries = list_markdown(settings.vault_path, prefix=prefix)
             return [{"path": s.path, "title": s.title} for s in summaries]
@@ -111,15 +146,14 @@ def build_server(
             return {"error": str(e)}
 
     @mcp.tool()
-    def search(query: str, limit: int = 5) -> list[dict[str, Any]]:
-        """BM25 keyword search over the vault (hybrid retrieval arrives in v2).
-
-        Args:
-            query: Free-text query.
-            limit: Max results to return.
-        """
+    def search(
+        query: str,
+        limit: int = 5,
+        mode: Literal["hybrid", "bm25", "vector"] = "hybrid",
+    ) -> list[dict[str, Any]]:
+        """Search the vault. Modes: hybrid (default, BM25+vector+RRF), bm25, vector."""
         try:
-            hits = fts.search(query, limit=limit)
+            hits = hybrid.search(query, limit=limit, mode=mode)
             return [
                 {
                     "path": h.path,
@@ -167,21 +201,31 @@ def build_server(
             logger.exception("update_document failed")
             return {"error": str(e)}
 
+    @mcp.tool()
+    def reindex_all_embeddings() -> dict[str, Any]:
+        """Wipe and rebuild every chunk's embedding (run after changing the model)."""
+        try:
+            count = indexer.reindex_all_embeddings()
+            return {"reindexed_files": count, "completed_at": _now_iso()}
+        except Exception as e:
+            logger.exception("reindex_all_embeddings failed")
+            return {"error": str(e)}
+
     return mcp, deps
 
 
 class ServerDeps:
-    """Handle on background machinery so main() and tests can shut down cleanly."""
-
     def __init__(
         self,
         settings: Settings,
         fts: FTSStore,
+        vectors: VectorStore | None,
         indexer: Indexer,
         watcher: VaultWatcher | None,
     ) -> None:
         self.settings = settings
         self.fts = fts
+        self.vectors = vectors
         self.indexer = indexer
         self.watcher = watcher
 
@@ -195,6 +239,11 @@ class ServerDeps:
             self.fts.close()
         except Exception:
             logger.exception("fts.close failed")
+        if self.vectors is not None:
+            try:
+                self.vectors.close()
+            except Exception:
+                logger.exception("vectors.close failed")
 
 
 def _atomic_write_markdown(target: Path, content: str, fm: dict) -> None:

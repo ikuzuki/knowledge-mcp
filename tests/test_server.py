@@ -15,7 +15,7 @@ def _tool(server, name: str):
 
 
 def test_list_documents_returns_both(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         result = _tool(server, "list_documents")()
         paths = {entry["path"] for entry in result}
@@ -25,7 +25,7 @@ def test_list_documents_returns_both(settings):
 
 
 def test_list_documents_prefix_filter(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         result = _tool(server, "list_documents")(prefix="notes/")
         assert [e["path"] for e in result] == ["notes/alpha.md"]
@@ -34,7 +34,7 @@ def test_list_documents_prefix_filter(settings):
 
 
 def test_list_documents_title_extraction(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         result = _tool(server, "list_documents")()
         titles = {e["path"]: e["title"] for e in result}
@@ -45,7 +45,7 @@ def test_list_documents_title_extraction(settings):
 
 
 def test_get_document_parses_frontmatter(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         doc = _tool(server, "get_document")(path="notes/alpha.md")
         assert doc["title"] == "Alpha Note"
@@ -56,7 +56,7 @@ def test_get_document_parses_frontmatter(settings):
 
 
 def test_get_document_missing_returns_error(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         doc = _tool(server, "get_document")(path="does-not-exist.md")
         assert "error" in doc
@@ -65,7 +65,7 @@ def test_get_document_missing_returns_error(settings):
 
 
 def test_get_document_rejects_traversal(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         doc = _tool(server, "get_document")(path="../outside.md")
         assert "error" in doc
@@ -77,7 +77,7 @@ def test_get_document_rejects_traversal(settings):
 
 
 def test_create_document_writes_and_errors_on_duplicate(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         create = _tool(server, "create_document")
         res = create(path="new/fresh.md", content="# Fresh\n\nBody.")
@@ -94,7 +94,7 @@ def test_create_document_writes_and_errors_on_duplicate(settings):
 
 
 def test_update_document_atomic_and_requires_existing(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         update = _tool(server, "update_document")
         missing = update(path="nope.md", content="x")
@@ -111,7 +111,7 @@ def test_update_document_atomic_and_requires_existing(settings):
 
 
 def test_search_returns_bm25_hits(settings):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         # Seed the FTS index directly via the indexer.
         deps.indexer.reindex_all()
@@ -126,7 +126,7 @@ def test_search_returns_bm25_hits(settings):
 
 @pytest.mark.parametrize("bad", ["../outside.md", "/abs.md", "no-suffix"])
 def test_create_document_rejects_bad_paths(settings, bad):
-    server, deps = build_server(settings, start_indexing=False)
+    server, deps = build_server(settings, start_indexing=False, enable_vectors=False)
     try:
         res = _tool(server, "create_document")(path=bad, content="x")
         assert "error" in res

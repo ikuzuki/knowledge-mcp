@@ -8,8 +8,8 @@ dense vector search via LanceDB — with a file watcher that keeps the indices
 in sync as you edit notes in your favourite editor. Embeddings run locally
 through [Ollama](https://ollama.com/).
 
-> **Status:** v0 — plumbing only. `list_documents` and `get_document` work.
-> Search, indexing, and vectors arrive in v1 and v2.
+> **Status:** v2 — hybrid retrieval over BM25 (SQLite FTS5) and dense vectors
+> (LanceDB + Ollama). File watcher keeps indices live.
 
 ## Install
 
@@ -66,12 +66,36 @@ KNOWLEDGE_MCP_VAULT_PATH=/path/to/vault knowledge-mcp
 
 The server speaks MCP over stdio — useful only when driven by a client.
 
-## Tools (v0)
+## Tools
 
 | Tool | Purpose |
 |---|---|
 | `list_documents(prefix="")` | List every `.md` file in the vault. Optional path-prefix filter. |
 | `get_document(path)` | Read a file; returns `{path, title, frontmatter, content}`. |
+| `search(query, limit=5, mode="hybrid")` | Hybrid (BM25+vector+RRF), `bm25`, or `vector` mode. |
+| `create_document(path, content, frontmatter_data=None)` | Create a new `.md` file atomically. |
+| `update_document(path, content, frontmatter_data=None)` | Overwrite an existing `.md` file atomically. |
+| `reindex_all_embeddings()` | Wipe and rebuild every chunk's embedding — run after changing the model. |
+
+## Prerequisites
+
+For vector search (v2), install [Ollama](https://ollama.com/) and pull the
+embedding model:
+
+```bash
+ollama pull nomic-embed-text:v1.5
+```
+
+If Ollama is unreachable on startup the server degrades gracefully to
+BM25-only until it comes back.
+
+## Scripts
+
+```bash
+python -m scripts.reindex                    # full rebuild of both indices
+python -m scripts.reindex --embeddings-only  # wipe + rebuild vectors only
+python -m scripts.gc                         # remove index rows for deleted files
+```
 
 ## Development
 

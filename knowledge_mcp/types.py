@@ -1,8 +1,9 @@
-"""Shared dataclasses used across chunking, storage, search, and indexing."""
+"""Shared dataclasses and protocols used across the package."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -32,3 +33,15 @@ class SearchHit:
     content: str
     score: float
     chunk_index: int = 0
+
+
+@runtime_checkable
+class EmbeddingProvider(Protocol):
+    """Protocol for anything that can turn text into dense vectors."""
+
+    model_version: str
+    dim: int
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per input text, in the same order."""
+        ...
