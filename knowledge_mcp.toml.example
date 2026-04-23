@@ -1,0 +1,15 @@
+# Copy to knowledge_mcp.toml and edit. Env vars (KNOWLEDGE_MCP_*) take precedence.
+
+# Absolute path to the markdown vault root. Required.
+vault_path = "/path/to/your/vault"
+
+# Local Ollama embedding model. Pin the version.
+embedding_model = "nomic-embed-text:v1.5"
+embedding_endpoint = "http://localhost:11434/api/embeddings"
+
+# Chunker.
+chunk_size = 512
+chunk_overlap = 50
+
+# Reciprocal Rank Fusion constant for hybrid search (v2).
+rrf_k = 60
