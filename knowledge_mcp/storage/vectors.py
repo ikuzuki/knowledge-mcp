@@ -50,10 +50,23 @@ class VectorStore:
         self._table = self._open_or_create_table()
 
     def _open_or_create_table(self):
-        if self.table_name in self._db.list_tables():
+        # LanceDB's list_tables() may return a Page object, not a plain list, so
+        # iterate to collect names. Fall back to try/except for safety.
+        try:
+            existing = {name for name in self._db.list_tables()}
+        except Exception:
+            existing = set()
+        if self.table_name in existing:
             return self._db.open_table(self.table_name)
-        empty = pa.Table.from_pylist([], schema=self._schema)
-        return self._db.create_table(self.table_name, data=empty, schema=self._schema)
+        try:
+            empty = pa.Table.from_pylist([], schema=self._schema)
+            return self._db.create_table(
+                self.table_name, data=empty, schema=self._schema
+            )
+        except ValueError as e:
+            if "already exists" in str(e):
+                return self._db.open_table(self.table_name)
+            raise
 
     # ------------------------------------------------------------------ writes
 
